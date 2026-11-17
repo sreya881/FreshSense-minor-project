@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreshSense · Tomato freshness dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  @property --t1 { syntax: '<color>'; inherits: true; initial-value: #EF5B45; }
+  @property --t2 { syntax: '<color>'; inherits: true; initial-value: #B81E12; }
+  @property --tleaf { syntax: '<color>'; inherits: true; initial-value: #3E8E41; }
+
+  :root {
+    --bg: #EDF1E8; --surface: #FAFBF7; --ink: #15251C; --muted: #56675C; --line: #D3DCCD;
+    --fresh: #237A4B; --mod: #B87400; --spoiled: #B3261E;
+    --font-display: 'Bricolage Grotesque', 'Trebuchet MS', system-ui, sans-serif;
+    --font-body: 'Figtree', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0E1611; --surface: #16211A; --ink: #E9F1E5; --muted: #9BAEA1; --line: #26362B;
+      --fresh: #4FC98A; --mod: #F0B429; --spoiled: #FF7166; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0E1611; --surface: #16211A; --ink: #E9F1E5; --muted: #9BAEA1; --line: #26362B;
+    --fresh: #4FC98A; --mod: #F0B429; --spoiled: #FF7166; color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.5; --status: var(--fresh); }
+  body[data-state="moderate"] { --status: var(--mod); }
+  body[data-state="spoiled"]  { --status: var(--spoiled); }
+  body[data-state="idle"]     { --status: var(--muted); }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 20px 20px 40px; }
+
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 4px 0 20px; }
+  .brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .brand h1 { font-family: var(--font-display); font-weight: 700; font-size: 1.6rem; letter-spacing: -0.02em; margin: 0; }
+  .brand p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 14px; font-size: 0.875rem; font-weight: 500; }
+  .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fresh); }
+  .pill.warn .dot { background: var(--spoiled); }
+  .pill.idle .dot { background: var(--muted); }
+
+  .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+  .verdict { grid-column: span 5; }
+  .chart-card { grid-column: span 7; }
+  .probs { grid-column: span 4; }
+  .pipeline { grid-column: span 8; }
+  .controls { grid-column: span 4; }
+  .log { grid-column: span 8; }
+
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 20px; min-width: 0; }
+  .card h2 { font-family: var(--font-display); font-weight: 600; font-size: 1.05rem; margin: 0 0 14px; }
+
+  .verdict {
+    background: color-mix(in srgb, var(--status) 13%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--status) 28%, var(--line));
+    border-radius: 28px; padding: 24px 28px 28px;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+    transition: background-color .8s ease, border-color .8s ease; min-width: 0;
+  }
+  .verdict .kicker { margin: 0; color: var(--muted); font-size: 0.95rem; font-weight: 500; }
+  #tomato { --t1: #EF5B45; --t2: #B81E12; --tleaf: #3E8E41; transition: --t1 .9s ease, --t2 .9s ease, --tleaf .9s ease; width: min(100%, 250px); height: auto; align-self: center; margin: 6px 0 2px; }
+  #tomato[data-state="idle"]     { --t1: #C3CDBE; --t2: #8A998A; --tleaf: #8A998A; }
+  #tomato[data-state="moderate"] { --t1: #DE7248; --t2: #AE4B22; --tleaf: #93A03A; }
+  #tomato[data-state="spoiled"]  { --t1: #94503F; --t2: #4C201B; --tleaf: #6B5A2E; }
+  #tomato .spots, #tomato .wrinkle { opacity: 0; transition: opacity .9s ease; }
+  #tomato[data-state="spoiled"] .spots { opacity: 1; }
+  #tomato[data-state="moderate"] .wrinkle, #tomato[data-state="spoiled"] .wrinkle { opacity: .55; }
+  #tomato .droop { transition: transform .9s ease; transform-origin: 120px 66px; }
+  #tomato[data-state="spoiled"] .droop { transform: translateY(3px) scale(.96); }
+
+  .verdict-word { font-family: var(--font-display); font-weight: 700; font-size: clamp(2.3rem, 5.2vw, 3.5rem); line-height: 1.02; letter-spacing: -0.03em; margin: 0; color: var(--status); transition: color .6s ease; }
+  .conf { margin: 6px 0 0; font-size: 1.05rem; font-weight: 600; }
+  .advice { margin: 4px 0 0; color: var(--muted); max-width: 34ch; }
+  .context { margin: 14px 0 0; font-size: 0.875rem; color: var(--muted); border-top: 1px solid color-mix(in srgb, var(--status) 25%, var(--line)); padding-top: 12px; width: 100%; overflow-wrap: anywhere; }
+
+  .chart-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+  .chart-head h2 { margin: 0; }
+  .chart-head .sub { margin: 2px 0 0; color: var(--muted); font-size: 0.875rem; }
+  .now { text-align: right; }
+  .now .num { font-family: var(--font-display); font-weight: 700; font-size: 2.4rem; line-height: 1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+  .now .unit { display: block; color: var(--muted); font-size: 0.8125rem; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  #chartBox { width: 100%; }
+  #chart { display: block; width: 100%; height: auto; }
+  #chart text { font-family: var(--font-body); }
+
+  .prob-row { margin-bottom: 16px; }
+  .prob-row:last-of-type { margin-bottom: 0; }
+  .prob-label { display: flex; justify-content: space-between; font-size: 0.95rem; font-weight: 500; margin-bottom: 6px; }
+  .prob-label .pct { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .track { height: 10px; border-radius: 6px; background: color-mix(in srgb, var(--ink) 9%, transparent); overflow: hidden; }
+  .fill { height: 100%; width: 0; border-radius: 6px; transition: width .5s ease; }
+  .fill.fresh { background: var(--fresh); } .fill.moderate { background: var(--mod); } .fill.spoiled { background: var(--spoiled); }
+  .prob-note { margin: 16px 0 0; color: var(--muted); font-size: 0.8125rem; }
+
+  .flow { display: flex; align-items: stretch; list-style: none; padding: 0; margin: 0; }
+  .flow li { flex: 1 1 0; min-width: 0; display: flex; align-items: center; }
+  .flow .node { flex: 1 1 auto; min-width: 0; border: 1px solid var(--line); border-radius: 12px; padding: 12px; transition: background-color .25s ease, color .25s ease, border-color .25s ease; height: 100%; }
+  .flow .node b { display: block; font-family: var(--font-display); font-weight: 600; font-size: 0.95rem; line-height: 1.25; }
+  .flow .node span { display: block; font-size: 0.8125rem; color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  .flow .node.on { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+  .flow .node.on span { color: color-mix(in srgb, var(--surface) 78%, transparent); }
+  .flow .arrow { flex: 0 0 22px; text-align: center; color: var(--muted); font-size: 1.1rem; }
+
+  .facts { margin: 0 0 16px; display: grid; gap: 10px; }
+  .facts div { display: grid; gap: 1px; }
+  .facts dt { font-size: 0.8125rem; color: var(--muted); }
+  .facts dd { margin: 0; font-size: 0.9rem; font-weight: 500; overflow-wrap: anywhere; }
+  .field-label { font-size: 0.875rem; font-weight: 600; margin: 0 0 8px; display: block; }
+  button, a.btn { font: inherit; color: inherit; cursor: pointer; }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+  .seg button { border: 1px solid var(--line); background: transparent; border-radius: 10px; padding: 9px 10px; font-size: 0.875rem; font-weight: 500; }
+  .seg button:hover { border-color: var(--muted); }
+  .seg button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+  .btn { display: inline-block; border: 1px solid var(--ink); background: transparent; border-radius: 10px; padding: 9px 16px; font-weight: 600; font-size: 0.9rem; text-decoration: none; }
+  .btn:hover { background: var(--ink); color: var(--surface); }
+  [hidden] { display: none !important; }
+
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+  th { text-align: left; font-weight: 600; color: var(--muted); font-size: 0.8125rem; padding: 0 12px 8px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 8px 12px 8px 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  .res { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; }
+  .res i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--muted); }
+  .res i.fresh { background: var(--fresh); } .res i.moderate { background: var(--mod); } .res i.spoiled { background: var(--spoiled); }
+
+  .foot { margin: 22px 2px 0; color: var(--muted); font-size: 0.8125rem; max-width: 90ch; }
+  :focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; border-radius: 6px; }
+
+  @media (max-width: 960px) {
+    .verdict, .chart-card, .probs, .pipeline, .controls, .log { grid-column: span 12; }
+    .verdict { align-items: center; text-align: center; }
+    .advice { max-width: none; }
+  }
+  @media (max-width: 720px) {
+    .flow { flex-direction: column; }
+    .flow li { flex-direction: column; align-items: stretch; }
+    .flow .arrow { flex: 0 0 auto; transform: rotate(90deg); padding: 2px 0; }
+    .wrap { padding: 14px 14px 32px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body data-state="idle">
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand"><h1>FreshSense</h1><p>Tomato freshness monitor</p></div>
+    <div class="pill idle" id="pill"><span class="dot"></span><span id="pillText">Connecting…</span></div>
+  </header>
+
+  <main class="grid">
+
+    <section class="verdict" aria-labelledby="verdictWord">
+      <p class="kicker">Current prediction</p>
+      <svg id="tomato" data-state="idle" viewBox="0 0 240 240" role="img" aria-label="Illustration of a tomato that changes colour with freshness">
+        <defs>
+          <radialGradient id="body" cx="0.36" cy="0.32" r="0.85">
+            <stop offset="0" style="stop-color:var(--t1)"/>
+            <stop offset="1" style="stop-color:var(--t2)"/>
+          </radialGradient>
+        </defs>
+        <ellipse cx="120" cy="226" rx="70" ry="8" fill="#000" opacity=".12"/>
+        <path d="M120 62 C150 44 196 60 208 104 C220 150 196 208 138 220 C126 223 114 223 102 220 C44 208 20 150 32 104 C44 60 90 44 120 62 Z" fill="url(#body)"/>
+        <g class="wrinkle" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round">
+          <path d="M58 150 q12 10 28 8"/><path d="M160 96 q14 4 24 16"/><path d="M92 200 q14 -6 30 -2"/>
+        </g>
+        <g class="spots">
+          <circle cx="82" cy="140" r="12" fill="#8C9A72" opacity=".45"/><circle cx="82" cy="140" r="8" fill="#241610" opacity=".7"/>
+          <circle cx="152" cy="122" r="15" fill="#8C9A72" opacity=".4"/><circle cx="152" cy="122" r="10" fill="#241610" opacity=".7"/>
+          <circle cx="128" cy="182" r="10" fill="#8C9A72" opacity=".4"/><circle cx="128" cy="182" r="6" fill="#241610" opacity=".7"/>
+          <circle cx="72" cy="98" r="7" fill="#241610" opacity=".6"/><circle cx="174" cy="166" r="8" fill="#241610" opacity=".6"/>
+        </g>
+        <ellipse cx="78" cy="108" rx="20" ry="32" transform="rotate(28 78 108)" fill="#fff" opacity=".22"/>
+        <g class="droop">
+          <g transform="translate(120 66) scale(1 .55)" style="fill:var(--tleaf)">
+            <path d="M0 0 C14 -12 36 -10 50 4 C36 10 14 12 0 0 Z"/>
+            <path d="M0 0 C14 -12 36 -10 50 4 C36 10 14 12 0 0 Z" transform="rotate(60)"/>
+            <path d="M0 0 C14 -12 36 -10 50 4 C36 10 14 12 0 0 Z" transform="rotate(120)"/>
+            <path d="M0 0 C14 -12 36 -10 50 4 C36 10 14 12 0 0 Z" transform="rotate(180)"/>
+            <path d="M0 0 C14 -12 36 -10 50 4 C36 10 14 12 0 0 Z" transform="rotate(240)"/>
+            <path d="M0 0 C14 -12 36 -10 50 4 C36 10 14 12 0 0 Z" transform="rotate(300)"/>
+          </g>
+          <path d="M115 68 C115 50 117 40 124 32 L131 37 C127 44 126 54 126 68 Z" style="fill:var(--tleaf)"/>
+          <path d="M115 68 C115 50 117 40 124 32 L131 37 C127 44 126 54 126 68 Z" fill="#000" opacity=".18"/>
+        </g>
+      </svg>
+      <h2 class="verdict-word" id="verdictWord" aria-live="polite">Waiting…</h2>
+      <p class="conf" id="conf">Waiting for the first reading</p>
+      <p class="advice" id="advice"></p>
+      <p class="context" id="context"></p>
+    </section>
+
+    <section class="card chart-card" aria-labelledby="chartTitle">
+      <div class="chart-head">
+        <div>
+          <h2 id="chartTitle">MQ-135 gas reading</h2>
+          <p class="sub">Last 60 readings</p>
+        </div>
+        <div class="now"><span class="num" id="nowNum">–</span><span class="unit" id="nowUnit">ADC</span></div>
+      </div>
+      <div id="chartBox"><svg id="chart" role="img" aria-label="Line chart of recent gas sensor readings"></svg></div>
+    </section>
+
+    <section class="card probs" aria-labelledby="probTitle">
+      <h2 id="probTitle">Model output</h2>
+      <div class="prob-row"><div class="prob-label"><span>Fresh</span><span class="pct" id="pFreshT">–</span></div><div class="track"><div class="fill fresh" id="pFresh"></div></div></div>
+      <div class="prob-row"><div class="prob-label"><span>Moderately fresh</span><span class="pct" id="pModerateT">–</span></div><div class="track"><div class="fill moderate" id="pModerate"></div></div></div>
+      <div class="prob-row"><div class="prob-label"><span>Spoiled</span><span class="pct" id="pSpoiledT">–</span></div><div class="track"><div class="fill spoiled" id="pSpoiled"></div></div></div>
+      <p class="prob-note" id="probNote"></p>
+    </section>
+
+    <section class="card pipeline" aria-labelledby="pipeTitle">
+      <h2 id="pipeTitle">How a reading reaches this screen</h2>
+      <ol class="flow" id="flow">
+        <li><div class="node"><b>Gas sensor</b><span id="n1">MQ-135</span></div><div class="arrow" aria-hidden="true">›</div></li>
+        <li><div class="node"><b>Arduino Uno</b><span id="n2">–</span></div><div class="arrow" aria-hidden="true">›</div></li>
+        <li><div class="node"><b>Data collection</b><span id="n3">0 received</span></div><div class="arrow" aria-hidden="true">›</div></li>
+        <li><div class="node"><b>ML classifier</b><span id="n4">–</span></div><div class="arrow" aria-hidden="true">›</div></li>
+        <li><div class="node"><b>Dashboard</b><span id="n5">–</span></div></li>
+      </ol>
+    </section>
+
+    <section class="card controls" aria-labelledby="ctlTitle">
+      <h2 id="ctlTitle">Connection</h2>
+      <dl class="facts">
+        <div><dt>Data source</dt><dd id="fSource">–</dd></div>
+        <div><dt>Model</dt><dd id="fModel">–</dd></div>
+        <div><dt>Last reading</dt><dd id="fLast">–</dd></div>
+      </dl>
+      <div id="demoBox" hidden>
+        <span class="field-label" id="sampleLabel">Simulated sample</span>
+        <div class="seg" role="group" aria-labelledby="sampleLabel" id="seg">
+          <button type="button" data-mode="timeline" aria-pressed="true">Storage timeline</button>
+          <button type="button" data-mode="fresh" aria-pressed="false">Fresh</button>
+          <button type="button" data-mode="moderate" aria-pressed="false">Moderately fresh</button>
+          <button type="button" data-mode="spoiled" aria-pressed="false">Spoiled</button>
+        </div>
+      </div>
+      <a class="btn" href="/api/export.csv" download>Download readings (CSV)</a>
+    </section>
+
+    <section class="card log" aria-labelledby="logTitle">
+      <h2 id="logTitle">Recent readings</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Time</th><th scope="col">Sensor (ADC)</th><th scope="col" id="avgHead">Average</th><th scope="col">Result</th></tr></thead>
+          <tbody id="logBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <p class="foot" id="foot"></p>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var ADVICE = {
+    fresh: 'Good to eat. Gas levels are close to a fresh tomato\'s baseline.',
+    moderate: 'Still usable, but gas levels are rising. Use it soon.',
+    spoiled: 'Gas levels are high. Do not eat this tomato.'
+  };
+  var NAMES = { fresh: 'Fresh', moderate: 'Moderately fresh', spoiled: 'Spoiled' };
+  var STALE_AFTER = 6; // seconds without a new reading before we call it disconnected
+  var N = 60;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var lastSeenT = null;
+  var current = null; // most recent state from the server
+
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function fmtTime(sec) {
+    var d = new Date(sec * 1000);
+    return [d.getHours(), d.getMinutes(), d.getSeconds()].map(function (n) { return String(n).padStart(2, '0'); }).join(':');
+  }
+
+  // ---------- chart ----------
+  function drawChart(s) {
+    var box = $('chartBox'), svg = $('chart');
+    var W = Math.max(280, box.clientWidth || 600);
+    var H = W < 480 ? 220 : 290;
+    var pad = { l: 44, r: 12, t: 10, b: 22 };
+    var iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+    var hist = s.history;
+    var maxV = hist.reduce(function (m, r) { return Math.max(m, r.v); }, 0);
+    var yMax = clamp(Math.ceil((maxV * 1.25) / 100) * 100, 600, 1023);
+    var y = function (v) { return pad.t + ih * (1 - clamp(v, 0, yMax) / yMax); };
+    var x = function (i) { return pad.l + iw * i / (N - 1); };
+    var out = '';
+
+    // Zones the model assigns to each ADC range
+    (s.bands || []).forEach(function (b) {
+      if (b.from >= yMax) return;
+      var top = y(Math.min(b.to, yMax)), bottom = y(b.from);
+      var colour = b.label === 'fresh' ? 'var(--fresh)' : b.label === 'moderate' ? 'var(--mod)' : 'var(--spoiled)';
+      out += '<rect x="' + pad.l + '" y="' + top + '" width="' + iw + '" height="' + (bottom - top) + '" fill="' + colour + '" opacity=".13"/>';
+      if (bottom - top > 20) {
+        out += '<text x="' + (pad.l + 8) + '" y="' + (top + 16) + '" font-size="12" font-weight="500" fill="var(--ink)">' + NAMES[b.label] + '</text>';
+      }
+    });
+
+    var step = yMax > 600 ? 250 : 100;
+    for (var g = 0; g <= yMax; g += step) {
+      out += '<line x1="' + pad.l + '" x2="' + (W - pad.r) + '" y1="' + y(g) + '" y2="' + y(g) + '" stroke="var(--line)" stroke-width="1"/>';
+      out += '<text x="' + (pad.l - 8) + '" y="' + (y(g) + 4) + '" text-anchor="end" font-size="11" fill="var(--muted)">' + g + '</text>';
+    }
+    out += '<text x="' + (pad.l - 8) + '" y="' + (H - 4) + '" text-anchor="end" font-size="11" fill="var(--muted)">ADC</text>';
+
+    if (hist.length) {
+      var offset = N - hist.length;
+      var d = hist.map(function (r, i) { return (i === 0 ? 'M' : 'L') + x(i + offset).toFixed(1) + ' ' + y(r.v).toFixed(1); }).join(' ');
+      out += '<path d="' + d + '" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+      var last = hist[hist.length - 1];
+      out += '<circle cx="' + x(N - 1) + '" cy="' + y(last.v) + '" r="5" fill="var(--status)" stroke="var(--surface)" stroke-width="2"/>';
+      svg.setAttribute('aria-label', 'Line chart of the last ' + hist.length + ' gas readings. Latest value ' + last.v + '.');
+    } else {
+      out += '<text x="' + (W / 2) + '" y="' + (H / 2) + '" text-anchor="middle" font-size="14" fill="var(--muted)">No readings yet</text>';
+    }
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    svg.setAttribute('width', W);
+    svg.setAttribute('height', H);
+    svg.innerHTML = out;
+  }
+
+  // ---------- pipeline pulse ----------
+  function pulse() {
+    if (reduceMotion) return;
+    Array.prototype.forEach.call($('flow').querySelectorAll('.node'), function (n, i) {
+      setTimeout(function () { n.classList.add('on'); }, i * 110);
+      setTimeout(function () { n.classList.remove('on'); }, i * 110 + 260);
+    });
+  }
+
+  // ---------- render ----------
+  function setPill(kind, text) {
+    var p = $('pill');
+    p.className = 'pill' + (kind ? ' ' + kind : '');
+    $('pillText').textContent = text;
+  }
+
+  function render(s) {
+    current = s;
+    var latest = s.latest;
+    var age = s.last_update ? s.server_time - s.last_update : null;
+    var stale = age === null || age > STALE_AFTER;
+
+    // Status pill
+    if (s.source === 'demo') setPill('idle', 'Demo mode · simulated readings');
+    else if (!s.connected || stale) setPill('warn', 'No data from Arduino');
+    else setPill('', 'Live · ' + s.port);
+
+    // Verdict
+    var hasResult = latest && latest.label;
+    var key = hasResult ? latest.label : 'idle';
+    document.body.setAttribute('data-state', key);
+    $('tomato').setAttribute('data-state', key);
+    var word = $('verdictWord');
+    if (hasResult) {
+      word.textContent = NAMES[key];
+      $('conf').textContent = Math.round(latest.conf * 100) + '% confident';
+      $('advice').textContent = ADVICE[key];
+    } else if (latest) {
+      word.textContent = 'Collecting…';
+      $('conf').textContent = s.history.length + ' of ' + s.window + ' readings needed';
+      $('advice').textContent = 'The model looks at the last ' + s.window + ' readings together.';
+    } else {
+      word.textContent = 'Waiting…';
+      $('conf').textContent = 'Waiting for the first reading';
+      $('advice').textContent = s.source === 'serial' ? 'Make sure the Arduino sketch is uploaded and the USB cable is connected.' : '';
+    }
+    var ctx = s.message || '';
+    if (s.source === 'demo' && s.demo_mode === 'timeline') ctx = 'Simulated storage timeline · Day ' + s.demo_day.toFixed(1) + ' of 12';
+    else if (s.source === 'demo' && s.demo_mode) ctx = 'Simulated fixed sample · ' + NAMES[s.demo_mode];
+    else if (s.source === 'serial' && s.connected && !stale) ctx = 'Reading from ' + s.port + ' at ' + s.baud + ' baud';
+    else if (s.source === 'serial' && s.connected && stale) ctx = 'Connected to ' + s.port + ' but no numbers are arriving. Check the sketch and baud rate (' + s.baud + ').';
+    $('context').textContent = ctx;
+
+    // Reading
+    $('nowNum').textContent = latest ? latest.v : '–';
+    $('nowUnit').textContent = latest ? 'ADC · ' + (latest.v * 5 / 1023).toFixed(2) + ' V' : 'ADC';
+
+    // Probabilities
+    ['fresh', 'moderate', 'spoiled'].forEach(function (k) {
+      var cap = k.charAt(0).toUpperCase() + k.slice(1);
+      var p = hasResult ? Math.round(latest.probs[k] * 100) : null;
+      $('p' + cap).style.width = (p === null ? 0 : p) + '%';
+      $('p' + cap + 'T').textContent = p === null ? '–' : p + '%';
+    });
+    $('probNote').textContent = 'Based on the last ' + s.window + ' readings together, so one spike does not flip the result.';
+
+    // Pipeline
+    $('n1').textContent = latest ? 'MQ-135 · ' + latest.v + ' ADC' : 'MQ-135';
+    $('n2').textContent = s.source === 'serial' ? s.port + ' · ' + s.baud + ' baud' : 'Simulated';
+    $('n3').textContent = s.total + ' received';
+    $('n4').textContent = s.model.short;
+    $('n5').textContent = hasResult ? NAMES[key] : '–';
+    if (latest && latest.t !== lastSeenT) { lastSeenT = latest.t; pulse(); }
+
+    // Connection card
+    $('fSource').textContent = s.source === 'serial' ? 'Arduino on ' + s.port : 'Simulated readings (no Arduino found)';
+    $('fModel').textContent = s.model.short + '. ' + s.model.detail;
+    $('fLast').textContent = age === null ? 'Nothing received yet' : (age < 2 ? 'Just now' : Math.round(age) + ' seconds ago');
+    $('demoBox').hidden = s.source !== 'demo';
+    Array.prototype.forEach.call($('seg').querySelectorAll('button'), function (b) {
+      b.setAttribute('aria-pressed', String(b.getAttribute('data-mode') === s.demo_mode));
+    });
+
+    // Log
+    $('avgHead').textContent = 'Average of ' + s.window;
+    var rows = s.history.slice(-8).reverse();
+    var html = '';
+    rows.forEach(function (r) {
+      var label = r.label ? NAMES[r.label] : 'Collecting…';
+      html += '<tr><td>' + fmtTime(r.t) + '</td><td>' + r.v + '</td><td>' + r.avg.toFixed(0) +
+        '</td><td><span class="res"><i class="' + (r.label || '') + '"></i>' + label + '</span></td></tr>';
+    });
+    $('logBody').innerHTML = html;
+
+    // Footer note
+    $('foot').textContent = s.model.kind === 'placeholder'
+      ? 'This is a placeholder model with fixed example values, not one trained on your data. Record labelled tomato readings with collect_data.py, run train_model.py, then restart app.py.'
+      : 'Predictions come from the model trained on your recorded data. Results depend on how similar the current conditions are to your training recordings.';
+
+    drawChart(s);
+  }
+
+  function showOffline() {
+    setPill('warn', 'Dashboard cannot reach the server');
+    $('context').textContent = 'Start it again with: python app.py, then reload this page.';
+  }
+
+  // ---------- polling ----------
+  function poll() {
+    fetch('/api/state', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(render)
+      .catch(showOffline);
+  }
+
+  $('seg').addEventListener('click', function (e) {
+    var b = e.target.closest('button');
+    if (!b) return;
+    fetch('/api/demo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: b.getAttribute('data-mode') }) })
+      .then(poll);
+  });
+
+  if (window.ResizeObserver) new ResizeObserver(function () { if (current) drawChart(current); }).observe($('chartBox'));
+  poll();
+  setInterval(poll, 1000);
+})();
+</script>
+</body>
+</html>
